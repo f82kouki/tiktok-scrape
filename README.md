@@ -18,16 +18,16 @@ TikTok のハッシュタグから投稿者を発見し、各プロフィール�
 ```json
 {
   "tiktok_user_id": "MS4wLjABAAAA...",
-  "unique_id": "tantei_cosme",
-  "nickname": "コスメ探偵",
-  "signature": "bioテキスト ...",
+  "unique_id": "xxxxxxxxxxxx",
+  "nickname": "（表示名）",
+  "signature": "（bioテキスト）",
   "avatar_url": "https://...",
   "follower_count": 146900,
   "following_count": 312,
   "video_count": 184,
   "total_likes": 1240000,
   "is_verified": false,
-  "instagram_username": "ig_handle",
+  "instagram_username": "xxxxxxxxxxxx",
   "youtube_url": null,
   "twitter_username": null,
   "source_hashtag": "コスメ",
@@ -65,6 +65,105 @@ make step2       # ハッシュタグ「コスメ」から 20 件取得 (3〜8�
 ```
 
 すべて通れば、`output/result.json` と `output/result.csv` に結果が出ます。
+
+---
+
+## 実行例
+
+`make step2` (ハッシュタグ「コスメ」、最大 20 件取得) のターミナル出力例:
+
+```
+$ make step2
+uv run python -m src.main --hashtag "コスメ" --min-followers 100 --max-users-per-query 30 --max 20 --debug
+2026-05-12 16:07:21,712 [INFO] src.scraper: using persistent profile: ./.tiktok_profile
+[2026-05-12 16:07:32] INFO: Fetched (200) <GET https://www.tiktok.com/tag/%E3%82%B3%E3%82%B9%E3%83%A1>
+2026-05-12 16:07:32,140 [DEBUG] src.scraper: fetched https://www.tiktok.com/tag/コスメ: status=200 body=730,776 chars
+2026-05-12 16:07:32,151 [INFO] src.parser:   video-tile regex found 114 matches (タイル投稿者のみ、サイドバー除外)
+2026-05-12 16:07:32,151 [INFO] src.scraper: hashtag=コスメ: discovered 30 usernames
+[2026-05-12 16:07:54] INFO: Fetched (200) <GET https://www.tiktok.com/@xxxxxxxxxxxx>
+  ✓ @xxxxxxxxxxxx (3,179 followers)  [1件目を保存]
+[2026-05-12 16:08:07] INFO: Fetched (200) <GET https://www.tiktok.com/@yyyyyyyyyyyy>
+  ✓ @yyyyyyyyyyyy (104,500 followers)  [2件目を保存]
+[2026-05-12 16:08:28] INFO: Fetched (200) <GET https://www.tiktok.com/@zzzzzzzzzzzz>
+  ✓ @zzzzzzzzzzzz (1,103 followers)  [3件目を保存]
+[2026-05-12 16:08:48] INFO: Fetched (200) <GET https://www.tiktok.com/@aaaaaaaaaaaa>
+  ✓ @aaaaaaaaaaaa (132,500 followers)  [4件目を保存]
+... (省略) ...
+  ✓ @bbbbbbbbbbbb (532,300 followers)  [19件目を保存]
+  ✓ @cccccccccccc (21,800 followers)  [20件目を保存]
+
+取得完了: 20 件
+  JSON: output/result.json
+  CSV : output/result.csv
+```
+
+### ログの読み方
+
+| ログ行 | 意味 |
+|---|---|
+| `using persistent profile: ./.tiktok_profile` | `make login` で保存した cookie を読み込み |
+| `Fetched (200) <GET .../tag/...>` | ハッシュタグページの取得成功 |
+| `body=730,776 chars` | 受け取った HTML サイズ（login-wall 時は ~400KB に縮む） |
+| `video-tile regex found 114 matches` | 動画タイルから投稿者リンクを抽出（サイドバーのおすすめは除外） |
+| `discovered 30 usernames` | ユニーク化 + max-users-per-query で打ち切り |
+| `✓ @xxx (NNN followers) [N件目を保存]` | 取得成功 → result.json に逐次保存 |
+| `skip @xxx: followers N < 100` | min_followers でフィルタ除外（debug ログ） |
+
+### 取得結果ファイル
+
+```
+output/
+├── result.json          # JSON 形式（全 20 件）
+├── result.csv           # CSV 形式（Excel/Numbers で開ける）
+└── hashtag_コスメ_*.html # SAVE_HASHTAG_HTML=true のとき、取得元 HTML を保存
+```
+
+#### `output/result.json` のサンプル (1 件分)
+
+```json
+[
+  {
+    "tiktok_user_id": "MS4wLjABAAAA...",
+    "unique_id": "xxxxxxxxxxxx",
+    "nickname": "（表示名）",
+    "signature": "（bioテキスト）",
+    "avatar_url": "https://p16-common-sign.tiktokcdn.com/...",
+    "follower_count": 146900,
+    "following_count": 312,
+    "video_count": 184,
+    "total_likes": 2400000,
+    "is_verified": false,
+    "instagram_username": "xxxxxxxxxxxx_ig",
+    "youtube_url": null,
+    "twitter_username": null,
+    "source_hashtag": "コスメ",
+    "source_keyword": null,
+    "scraped_at": "2026-05-12T07:09:55.246123+00:00"
+  },
+  ...
+]
+```
+
+#### `output/result.csv` のサンプル
+
+```csv
+tiktok_user_id,unique_id,nickname,signature,avatar_url,follower_count,following_count,video_count,total_likes,is_verified,instagram_username,youtube_url,twitter_username,source_hashtag,source_keyword,scraped_at
+MS4wLjABAAAA...,xxxxxxxxxxxx,（表示名）,（bio）,https://...,146900,312,184,2400000,False,xxxxxxxxxxxx_ig,,,コスメ,,2026-05-12T07:09:55+00:00
+MS4wLjABAAAA...,yyyyyyyyyyyy,（表示名）,（bio）,https://...,3179,180,42,124000,False,,,,,コスメ,,2026-05-12T07:07:54+00:00
+...
+```
+
+### 実行時間の目安
+
+| コマンド | 件数 | 所要時間 |
+|---|---|---|
+| `make step1` | 1 件 (@tiktok) | 30 秒〜1 分 |
+| `make step2` (デフォルト) | 20 件 | 3〜8 分 |
+| `make step2 MAX=50 MAX_USERS_PER_QUERY=50` | 50 件 | 10〜20 分 |
+| `make scale` (5 タグ × 50 件) | 最大 50 件 | 30 分〜1 時間 |
+
+> 1 件あたり「ジッタースリープ 4〜8 秒 + プロフィールロード 5〜15 秒」≒ 10〜25 秒。bot 検出回避のため意図的にゆっくり。
+> 途中で `Ctrl+C` しても、それまで取得した分は `output/result.json` に逐次保存されているので失われません。
 
 ---
 
