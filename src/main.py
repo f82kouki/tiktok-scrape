@@ -62,7 +62,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hashtag", action="append", default=[], help="検索ハッシュタグ（複数指定可）")
     parser.add_argument("--keyword", action="append", default=[], help="検索キーワード（複数指定可）")
-    parser.add_argument("--min-followers", type=int, default=1000)
+    parser.add_argument("--min-followers", type=int, default=100)
     parser.add_argument("--max-users-per-query", type=int, default=30)
     parser.add_argument("--max", type=int, default=100, help="最大取得件数")
     parser.add_argument("--out-dir", default="output")
@@ -71,7 +71,8 @@ def main():
     setup_logging(args.debug)
 
     if not args.hashtag and not args.keyword:
-        parser.error("--hashtag または --keyword を最低1つ指定してください")
+        args.hashtag = ["コスメ"]
+        print('[INFO] --hashtag/--keyword 未指定のため、デフォルトの --hashtag コスメ で実行します')
 
     asyncio.run(run(args))
 

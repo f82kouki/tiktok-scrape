@@ -213,17 +213,38 @@ def extract_usernames_from_hashtag_html(html: str, max_users: int = 30) -> list[
         except Exception as e:
             logger.warning(f"hashtag JSON parse failed: {e}")
 
-    # フォールバック: HTML内の /@username リンクを拾う
-    # 動画タイルは絶対URL（https://www.tiktok.com/@user/video/N）、
-    # サイドバー等は相対パス（/@user）の両方が混在するため両対応。
-    fallback_matches = re.findall(
-        r'href="(?:https?://www\.tiktok\.com)?/@([A-Za-z0-9._]+)(?:/|")',
+    # フォールバック1: 動画タイルの href のみ（最優先）
+    # 動画タイルは <a href="https://www.tiktok.com/@user/video/N"> の絶対URL形式。
+    # この形だけを拾うことで、サイドバー「おすすめ」やフッターのノイズを完全に除外する。
+    video_tile_matches = re.findall(
+        r'href="https?://www\.tiktok\.com/@([A-Za-z0-9._]+)/video/\d+"',
         html,
     )
-    if fallback_matches:
-        logger.info(f"  fallback href regex found {len(fallback_matches)} /@username links")
+    if video_tile_matches:
+        logger.info(
+            f"  video-tile regex found {len(video_tile_matches)} matches "
+            f"(タイル投稿者のみ、サイドバー除外)"
+        )
+        for u in video_tile_matches:
+            if u not in seen:
+                seen.add(u)
+                usernames.append(u)
+                if len(usernames) >= max_users:
+                    return usernames
+
+    # フォールバック2: タイルが取れなかった時のみ広い regex
+    # （タグページが login-wall 等で動画タイル無しの場合の最終手段）
     if len(usernames) < max_users:
-        for u in fallback_matches:
+        broad_matches = re.findall(
+            r'href="(?:https?://www\.tiktok\.com)?/@([A-Za-z0-9._]+)(?:/|")',
+            html,
+        )
+        if broad_matches:
+            logger.info(
+                f"  broad fallback regex found {len(broad_matches)} matches "
+                f"(タイル取れず、サイドバー含む)"
+            )
+        for u in broad_matches:
             if u not in seen:
                 seen.add(u)
                 usernames.append(u)

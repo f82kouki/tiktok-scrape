@@ -114,6 +114,18 @@ class TikTokScraper:
         )
         if not html:
             return []
+
+        # SAVE_HASHTAG_HTML=true なら、スクレイパーが実際に見た HTML を
+        # output/hashtag_{hashtag}_{timestamp}.html に保存（証明用）
+        if env_bool("SAVE_HASHTAG_HTML", False):
+            from datetime import datetime
+            from pathlib import Path
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = Path("output") / f"hashtag_{hashtag}_{ts}.html"
+            out_path.parent.mkdir(exist_ok=True)
+            out_path.write_text(html, encoding="utf-8")
+            logger.info(f"  saved hashtag HTML: {out_path} ({len(html):,} chars)")
+
         usernames = extract_usernames_from_hashtag_html(html, max_users=max_users)
         logger.info(f"hashtag={hashtag}: discovered {len(usernames)} usernames")
         return usernames
