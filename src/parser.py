@@ -167,12 +167,24 @@ def extract_usernames_from_hashtag_html(html: str, max_users: int = 30) -> list[
     usernames: list[str] = []
     seen: set[str] = set()
 
+    # login-wall 検出（HTMLの中身を判定）
+    lower = html.lower()
+    login_keywords = [kw for kw in ("log in", "login to", "sign up", "ログイン") if kw in lower]
+    if login_keywords:
+        logger.info(f"hashtag HTML contains login keywords: {login_keywords} (login-wall の可能性)")
+
     data = extract_universal_json_from_html(html)
-    if data:
+    if data is None:
+        logger.warning("__UNIVERSAL_DATA_FOR_REHYDRATION__ が HTML に存在しない")
+    else:
+        scope = data.get("__DEFAULT_SCOPE__", {})
+        logger.info(f"__DEFAULT_SCOPE__ keys ({len(scope)}): {sorted(scope.keys())}")
         try:
-            scope = data.get("__DEFAULT_SCOPE__", {})
             for key in ("webapp.challenge-detail", "webapp.video-list", "webapp.search"):
-                section = scope.get(key, {})
+                if key not in scope:
+                    logger.info(f"  scope[{key}] not present")
+                    continue
+                section = scope.get(key)
                 if not isinstance(section, dict):
                     continue
                 items = (
@@ -181,7 +193,12 @@ def extract_usernames_from_hashtag_html(html: str, max_users: int = 30) -> list[
                     or section.get("data", [])
                 )
                 if not isinstance(items, list):
+                    logger.info(
+                        f"  scope[{key}] present but no itemList/items/data list "
+                        f"(keys={list(section.keys())[:10]})"
+                    )
                     continue
+                logger.info(f"  scope[{key}] has {len(items)} items")
                 for item in items:
                     if not isinstance(item, dict):
                         continue
@@ -197,8 +214,16 @@ def extract_usernames_from_hashtag_html(html: str, max_users: int = 30) -> list[
             logger.warning(f"hashtag JSON parse failed: {e}")
 
     # フォールバック: HTML内の /@username リンクを拾う
+    # 動画タイルは絶対URL（https://www.tiktok.com/@user/video/N）、
+    # サイドバー等は相対パス（/@user）の両方が混在するため両対応。
+    fallback_matches = re.findall(
+        r'href="(?:https?://www\.tiktok\.com)?/@([A-Za-z0-9._]+)(?:/|")',
+        html,
+    )
+    if fallback_matches:
+        logger.info(f"  fallback href regex found {len(fallback_matches)} /@username links")
     if len(usernames) < max_users:
-        for u in re.findall(r'href="/@([A-Za-z0-9._]+)"', html):
+        for u in fallback_matches:
             if u not in seen:
                 seen.add(u)
                 usernames.append(u)

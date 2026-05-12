@@ -1,4 +1,4 @@
-.PHONY: help install step0 step1 step2 step3 run test clean
+.PHONY: help install login step0 step1 step2 step3 scale run test clean diag
 
 # 既定値（呼び出し時に上書き可能）
 HASHTAG ?= コスメ
@@ -18,6 +18,9 @@ install:  ## 依存と patchright/Chromium をインストール（初回のみ�
 	uv sync
 	uv run scrapling install
 
+login:  ## TikTok に手動ログイン（cookie を ./.tiktok_profile に保存）
+	uv run python -m scripts.login
+
 step0:  ## Step 0: ブラウザ起動の最低疎通（example.com）
 	uv run python -m scripts.check_browser
 
@@ -30,7 +33,26 @@ step2:  ## Step 2: ハッシュタグ経由（HASHTAG / MIN_FOLLOWERS / MAX で�
 step3:  ## Step 3: キーワード経由（KEYWORD / MAX で上書き可。login-wallで取れない可能性あり）
 	uv run python -m src.main --keyword "$(KEYWORD)" --max $(MAX) --debug
 
+# 本番近い規模ラン: 5ハッシュタグ × 各50件、最大250件
+# - 結果は1件ごとに output/result.json に逐次保存される（途中Ctrl+Cでも安全）
+# - 所要時間: おおよそ 1〜2 時間（リクエスト間4〜8秒 × 250 + プロフィールロード時間）
+# - HASHTAGS は他のタグに変えたい場合は make scale HASHTAGS="メンズコスメ ヘアアレンジ ..." で上書き
+SCALE_HASHTAGS ?= コスメ メイク スキンケア アイメイク リップ
+SCALE_MAX_PER_QUERY ?= 50
+SCALE_MAX ?= 250
+
+scale:  ## 本番近い規模: 5タグ×50件 (1〜2時間、逐次保存される)
+	uv run python -m src.main \
+		$(foreach h,$(SCALE_HASHTAGS),--hashtag "$(h)") \
+		--max-users-per-query $(SCALE_MAX_PER_QUERY) \
+		--max $(SCALE_MAX) \
+		--min-followers $(MIN_FOLLOWERS) \
+		--debug
+
 run: step2  ## step2 のエイリアス
+
+diag:  ## ハッシュタグページの診断（HASHTAG で上書き可）
+	uv run python -m scripts.diagnose_hashtag "$(HASHTAG)"
 
 test:  ## pytest 実行
 	uv run pytest -v

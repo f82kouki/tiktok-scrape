@@ -31,6 +31,8 @@ class TikTokScraper:
         self.interval_max = float(os.getenv("REQUEST_INTERVAL_MAX", "8.0"))
         self.proxy = os.getenv("HTTP_PROXY") or None
         self.headless = env_bool("HEADLESS", True)
+        # 永続プロファイル（手動ログイン後の cookie を再利用）
+        self.user_data_dir = os.getenv("TIKTOK_USER_DATA_DIR") or None
         self._stack: Optional[AsyncExitStack] = None
         self._session: Optional[AsyncStealthySession] = None
 
@@ -38,16 +40,20 @@ class TikTokScraper:
         # AsyncExitStack で AsyncStealthySession のライフサイクルを安全に管理
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
+        session_kwargs = dict(
+            headless=self.headless,
+            network_idle=True,       # ネットワーク静止待ち（JS実行完了の目安）
+            google_search=True,      # referer を Google にして自然に
+            block_webrtc=True,       # WebRTCリーク防止（プロキシ使用時必須級）
+            hide_canvas=True,        # canvas fingerprinting対策
+            timeout=60000,           # 60秒（TikTokのレンダリングは重い）
+            proxy=self.proxy,
+        )
+        if self.user_data_dir:
+            session_kwargs["user_data_dir"] = self.user_data_dir
+            logger.info(f"using persistent profile: {self.user_data_dir}")
         self._session = await self._stack.enter_async_context(
-            AsyncStealthySession(
-                headless=self.headless,
-                network_idle=True,       # ネットワーク静止待ち（JS実行完了の目安）
-                google_search=True,      # referer を Google にして自然に
-                block_webrtc=True,       # WebRTCリーク防止（プロキシ使用時必須級）
-                hide_canvas=True,        # canvas fingerprinting対策
-                timeout=60000,           # 60秒（TikTokのレンダリングは重い）
-                proxy=self.proxy,
-            )
+            AsyncStealthySession(**session_kwargs)
         )
         return self
 
@@ -83,7 +89,12 @@ class TikTokScraper:
                 elif not page.body:
                     logger.warning(f"Empty body at {url} (attempt {attempt + 1})")
                 else:
-                    return page.body.decode("utf-8", errors="replace")
+                    body = page.body.decode("utf-8", errors="replace")
+                    logger.debug(
+                        f"fetched {url}: status={getattr(page, 'status', '?')} "
+                        f"body={len(body):,} chars"
+                    )
+                    return body
             except Exception as e:
                 logger.error(f"Fetch failed {url} attempt {attempt + 1}: {e}")
             # 5秒+5*attempt+ジッターで待つ（指数より緩めに）
@@ -93,10 +104,13 @@ class TikTokScraper:
     async def discover_usernames_by_hashtag(
         self, hashtag: str, max_users: int = 30
     ) -> list[str]:
-        """ハッシュタグページから投稿者usernameを発見"""
+        """ハッシュタグページから投稿者usernameを発見
+
+        動画タイルは XHR で遅延ロードされるため、 challenge-item セレクタを待つ。
+        """
         url = f"{self.BASE_URL}/tag/{hashtag}"
         html = await self.fetch_html(
-            url, wait_selector="script#__UNIVERSAL_DATA_FOR_REHYDRATION__"
+            url, wait_selector='[data-e2e="challenge-item"]'
         )
         if not html:
             return []

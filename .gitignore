@@ -14,3 +14,4 @@ wheels/
 output/
 .scrapling/
 .pytest_cache/
+.tiktok_profile/
