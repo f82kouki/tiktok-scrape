@@ -1,13 +1,24 @@
-"""TikTok Shop 店舗ページのパース処理
+"""TikTok Shop（shop.tiktok.com）店舗ページ / 商品(PDP)ページのパース処理
 
-方針:
-- 埋め込みJSON抽出は src/parser.py の実績関数を **そのまま流用** する
-  （extract_universal_json_from_html / extract_sigi_state_from_html）。
-- parse_store() は現時点では「スキャフォールド」。__DEFAULT_SCOPE__ の全キーと
-  shop/store/seller を含む候補キーを logger.info で出す（parser.py の
-  extract_usernames_from_hashtag_html と同じ流儀）。
-  ★ Stage 2（scripts/dump_store_page.py）で store_page.json の実構造を見てから、
-    正しい scope key / フィールドパスに直して確定させること。★
+実測で確定した構造（2026-07 時点）:
+- shop.tiktok.com は TikTok 本体（www.tiktok.com）とは別アプリ（tiktok_shop_web_mono）で、
+  __UNIVERSAL_DATA_FOR_REHYDRATION__ / SIGI_STATE は **無い**。
+- 代わりに <script id="__MODERN_ROUTER_DATA__"> に SSR データが JSON で埋め込まれ、
+  商品(PDP)ページ / 店舗ページの両方で、店舗情報 shop_info が次の場所に入る:
+
+    __MODERN_ROUTER_DATA__
+      .loaderData.{<region>/pdp/... または <region>/store/...}
+        .page_config.components_map[N].component_data.shop_info
+
+  shop_info の主なキー:
+    seller_id, shop_name, shop_logo{url_list}, creator_name, desc,
+    sold_count, on_sell_product_count, review_count,
+    followers_count, video_count, shop_rating, shop_link, region ...
+
+発見用URLパターン（すべて shop.tiktok.com、robots で Disallow されていない）:
+    カテゴリ: https://shop.tiktok.com/jp/c/{slug}/{category_id}
+    商品    : https://shop.tiktok.com/jp/pdp/{product_id}      （/pdp/{slug}/{id} 形もある）
+    店舗    : https://shop.tiktok.com/jp/store/{slug}/{seller_id}
 """
 import json
 import logging
@@ -15,158 +26,192 @@ import re
 from typing import Optional
 
 from src.models import TiktokShop
-from src.parser import (
-    extract_universal_json_from_html,
-    extract_sigi_state_from_html,
-)
 
 logger = logging.getLogger(__name__)
 
+SHOP_BASE = "https://shop.tiktok.com"
+# 注（実測）: JP では独立した店舗ページのURLは公開の直GETでは開けない。
+#   - shop_info.shop_link（shop.tiktok.com/jp/store/{slug}/{id}） → 404
+#   - www.tiktok.com/shop/store/{slug}/{id}                        → /404 へリダイレクト
+# 店舗は TikTok Shop のSPA内でしか開けないため、確実に開けるのは取得元の
+# PDP(商品) URL（shop.tiktok.com/jp/pdp/{id}）。store_url にはそれ（source_url）を入れる。
 
-# 店舗URL: https://www.tiktok.com/shop/store/{slug}/{seller-id}
-#   slug は英数.-_、seller-id は数値。/shop/view/product/ は robots Disallow のため拾わない。
-_STORE_LINK_RE = re.compile(r"/shop/store/([A-Za-z0-9._-]+)/(\d+)")
-_STORE_ID_RE = re.compile(r"/shop/store/([^/]+)/(\d+)")
+# 店舗URL: .../store/{slug}/{seller_id}
+_STORE_ID_RE = re.compile(r"/store/([^/?#]+)/(\d+)")
+# 商品URL: .../pdp/{id} または .../pdp/{slug}/{id}
+_PDP_RE = re.compile(r"/jp/pdp/(?:[^/\"?#]+/)?(\d+)")
+# カテゴリURL: .../jp/c/{slug}/{id}
+_CATEGORY_RE = re.compile(r"/jp/c/([a-z0-9-]+)/(\d+)")
 
 
-def _parse_ids_from_url(url: str) -> tuple[str, str]:
-    """店舗URLから (slug, seller-id) を取り出す。取れなければ ("", "")。"""
-    m = _STORE_ID_RE.search(url)
-    if m:
-        return m.group(1), m.group(2)
-    return "", ""
+# ---------- 埋め込みJSON抽出 ----------
 
+def extract_modern_router_data(html: str) -> Optional[dict]:
+    """<script id="__MODERN_ROUTER_DATA__"> の JSON を取り出す"""
+    m = re.search(
+        r'<script[^>]+\bid="__MODERN_ROUTER_DATA__"[^>]*>(.*?)</script>',
+        html, re.DOTALL,
+    )
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError as e:
+        logger.warning(f"__MODERN_ROUTER_DATA__ parse失敗: {e}")
+        return None
+
+
+def find_shop_info(router_data: dict) -> Optional[dict]:
+    """__MODERN_ROUTER_DATA__ から shop_info dict を探して返す。
+
+    loaderData 配下の各ルートの page_config.components_map を走査し、
+    component_data.shop_info を持つ要素を拾う（PDP/店舗どちらの構造でも動く）。
+    """
+    loader = router_data.get("loaderData")
+    if not isinstance(loader, dict):
+        return None
+    for route_val in loader.values():
+        if not isinstance(route_val, dict):
+            continue
+        page_config = route_val.get("page_config")
+        if not isinstance(page_config, dict):
+            continue
+        cmap = page_config.get("components_map")
+        if not isinstance(cmap, list):
+            continue
+        for comp in cmap:
+            if not isinstance(comp, dict):
+                continue
+            cdata = comp.get("component_data")
+            if isinstance(cdata, dict) and isinstance(cdata.get("shop_info"), dict):
+                return cdata["shop_info"]
+    return None
+
+
+# ---------- 変換ヘルパ ----------
 
 def _to_int(v) -> int:
-    try:
-        return int(v) if v is not None else 0
-    except (TypeError, ValueError):
+    """'6135' や 21246 を int に。'6.1K+' 等の整形済み文字列は入力に使わない。"""
+    if v is None:
         return 0
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.search(r"-?\d+", str(v))
+    return int(m.group()) if m else 0
 
 
 def _to_float(v) -> Optional[float]:
     try:
-        return float(v) if v is not None else None
+        return float(v) if v is not None and str(v) != "" else None
     except (TypeError, ValueError):
         return None
 
 
-def parse_store(
+def _logo_url(shop_info: dict) -> Optional[str]:
+    logo = shop_info.get("shop_logo")
+    if isinstance(logo, dict):
+        urls = logo.get("url_list")
+        if isinstance(urls, list) and urls:
+            return urls[0]
+    return None
+
+
+def _slug_from_shop_link(shop_link: str, seller_id: str) -> str:
+    if shop_link:
+        m = _STORE_ID_RE.search(shop_link)
+        if m:
+            return m.group(1)
+    return ""
+
+
+# ---------- 店舗パース ----------
+
+def parse_shop(
     html: str,
-    store_url: str,
+    source_url: str,
     source_type: Optional[str] = None,
     source_value: Optional[str] = None,
 ) -> Optional[TiktokShop]:
-    """店舗ページ HTML → TiktokShop
+    """shop.tiktok.com の PDP / 店舗ページ HTML → TiktokShop
 
-    ⚠️ 下の scope key / フィールドパスは「推定」。Stage 2 で実 __DEFAULT_SCOPE__ の
-       キーとネスト構造を確認してから正しいパスに直すこと。
+    shop_info（__MODERN_ROUTER_DATA__ 内）から店舗情報を組み立てる。
     """
-    slug, shop_id = _parse_ids_from_url(store_url)
-
-    data = extract_universal_json_from_html(html)
-    if data is None:
-        # フォールバック: 旧形式 SIGI_STATE
-        data = extract_sigi_state_from_html(html)
-        if data is None:
-            logger.warning(
-                "店舗ページに埋め込みJSON（UNIVERSAL/SIGI）が無い "
-                "→ 店舗データが XHR 後読みの可能性。diagnose_shop / Network を確認"
-            )
-            return None
-
-    scope = data.get("__DEFAULT_SCOPE__", data) if isinstance(data, dict) else {}
-    all_keys = sorted(scope.keys()) if isinstance(scope, dict) else []
-    candidate_keys = [
-        k for k in all_keys
-        if any(t in k.lower() for t in ("shop", "store", "seller"))
-    ]
-    logger.info(f"店舗ページ __DEFAULT_SCOPE__ keys ({len(all_keys)}): {all_keys}")
-    logger.info(f"  店舗候補キー: {candidate_keys}")
-
-    # ↓ 候補キー配下の dict を section とする（Stage 2 で正しいキーに固定する）
-    section = None
-    for k in candidate_keys:
-        v = scope.get(k)
-        if isinstance(v, dict):
-            section = v
-            break
-    if section is None:
+    router = extract_modern_router_data(html)
+    if router is None:
         logger.warning(
-            "店舗データの scope が特定できない（Stage 2 の store_page.json を見てここを直す）"
+            "__MODERN_ROUTER_DATA__ が無い（shop.tiktok.com 以外 or 構造変化）: %s",
+            source_url,
         )
-        # slug/id だけでも返しておくと発見→重複排除は回る（PoC 中間状態）
-        if shop_id:
-            return TiktokShop(
-                shop_id=shop_id,
-                store_slug=slug,
-                store_url=store_url,
-                source_type=source_type,
-                source_value=source_value,
-            )
         return None
 
-    # ↓ フィールド名は推定。実 JSON を見て正しいパスにマッピングし直す。
-    shop = (
-        section.get("shopInfo")
-        or section.get("shop")
-        or section.get("sellerInfo")
-        or section
-    )
-    if not isinstance(shop, dict):
-        shop = section
-    stats = shop.get("stats", {}) if isinstance(shop.get("stats"), dict) else {}
+    shop_info = find_shop_info(router)
+    if not shop_info:
+        logger.warning("shop_info が components_map に見つからない: %s", source_url)
+        return None
+
+    seller_id = str(shop_info.get("seller_id") or shop_info.get("global_seller_id") or "")
+    if not seller_id:
+        logger.warning("shop_info に seller_id が無い: %s", source_url)
+        return None
+
+    shop_link = shop_info.get("shop_link") or ""
+    slug = _slug_from_shop_link(shop_link, seller_id)
+    # store_url には「確実に開ける」取得元URL（通常はPDP）を入れる。
+    # 独立した店舗ページURLは公開GETで開けないため使わない（上の注を参照）。
 
     return TiktokShop(
-        shop_id=shop_id or str(shop.get("sellerId") or shop.get("shopId") or ""),
+        shop_id=seller_id,
         store_slug=slug,
-        store_url=store_url,
-        shop_name=shop.get("shopName") or shop.get("name") or "",
-        follower_count=_to_int(
-            stats.get("followerCount", shop.get("followerCount", 0))
-        ),
-        total_sold=_to_int(stats.get("soldCount", shop.get("totalSold", 0))),
-        product_count=_to_int(
-            stats.get("productCount", shop.get("onSellProductCount", 0))
-        ),
-        rating=_to_float(shop.get("ratingScore") or shop.get("rating")),
-        rating_count=_to_int(shop.get("ratingCount", 0)),
-        avatar_url=shop.get("avatar") or shop.get("logoUrl"),
-        tiktok_username=shop.get("uniqueId") or shop.get("username"),
-        is_official=bool(shop.get("isOfficial", False)),
+        store_url=source_url,
+        shop_name=shop_info.get("shop_name") or shop_info.get("creator_name") or "",
+        follower_count=_to_int(shop_info.get("followers_count")),
+        total_sold=_to_int(shop_info.get("sold_count")),
+        product_count=_to_int(shop_info.get("on_sell_product_count")),
+        video_count=_to_int(shop_info.get("video_count")),
+        rating=_to_float(shop_info.get("shop_rating")),
+        rating_count=_to_int(shop_info.get("review_count")),
+        avatar_url=_logo_url(shop_info),
+        region=shop_info.get("region"),
+        description=shop_info.get("desc"),
         source_type=source_type,
-        source_value=source_value,
+        source_value=source_value or source_url,
     )
 
 
-def extract_store_urls_from_html(html: str, max_urls: int = 30) -> list[str]:
-    """任意のHTML（shop.tiktok.com/jp・/tag ページ等）から店舗URLを収集する。
+# ---------- 発見（URL抽出） ----------
 
-    JSON優先 → href 正規表現フォールバックの二段構え（parser.py の思想を踏襲）。
-    /shop/view/product/ は robots Disallow のため対象外（_STORE_LINK_RE は store のみ一致）。
-    """
+def extract_category_urls_from_html(html: str, max_urls: int = 50) -> list[str]:
+    """HTML から カテゴリURL /jp/c/{slug}/{id} を収集（重複排除）"""
     urls: list[str] = []
     seen: set[str] = set()
-
-    def _add(slug: str, sid: str) -> bool:
-        key = f"{slug}/{sid}"
+    for slug, cid in _CATEGORY_RE.findall(html):
+        key = f"{slug}/{cid}"
         if key in seen:
-            return True
+            continue
         seen.add(key)
-        urls.append(f"https://www.tiktok.com/shop/store/{slug}/{sid}")
-        return len(urls) < max_urls
-
-    # 1) 埋め込みJSON全体を走査（PoC では素朴に JSON 文字列を正規表現でスキャン）
-    data = extract_universal_json_from_html(html)
-    if data is not None:
-        text = json.dumps(data, ensure_ascii=False)
-        for slug, sid in _STORE_LINK_RE.findall(text):
-            if not _add(slug, sid):
-                return urls
-
-    # 2) href / 生HTML の正規表現フォールバック
-    for slug, sid in _STORE_LINK_RE.findall(html):
-        if not _add(slug, sid):
+        urls.append(f"{SHOP_BASE}/jp/c/{slug}/{cid}")
+        if len(urls) >= max_urls:
             break
-
     return urls
+
+
+def extract_pdp_urls_from_html(html: str, max_urls: int = 50) -> list[str]:
+    """HTML から 商品(PDP)URL /jp/pdp/{id} を収集（slug は落として id で正規化）"""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for pid in _PDP_RE.findall(html):
+        if pid in seen:
+            continue
+        seen.add(pid)
+        urls.append(f"{SHOP_BASE}/jp/pdp/{pid}")
+        if len(urls) >= max_urls:
+            break
+    return urls
+
+
+def parse_store_ids(url: str) -> tuple[str, str]:
+    """店舗URL .../store/{slug}/{seller_id} から (slug, seller_id) を取り出す"""
+    m = _STORE_ID_RE.search(url)
+    return (m.group(1), m.group(2)) if m else ("", "")

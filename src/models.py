@@ -33,23 +33,26 @@ class TiktokUser:
 class TiktokShop:
     """TikTok Shop 店舗（seller）のデータモデル
 
-    一意キーは shop_id（= 店舗URL末尾の seller-id）。本番では doc id 候補になる。
-    フィールドは店舗ページの埋め込みJSONに合わせて Stage 2 で確定する想定。
+    一意キーは shop_id（= shop_info.seller_id）。本番では doc id 候補になる。
+    フィールドは shop.tiktok.com の PDP/店舗ページに埋め込まれた
+    __MODERN_ROUTER_DATA__ の shop_info（実測で確定）に対応する。
     """
-    shop_id: str                        # seller-id（URL末尾の数値）= 一意キー
-    store_slug: str                     # store-slug（URL中間のスラッグ）
-    store_url: str                      # 取得元の完全URL
+    shop_id: str                        # seller_id = 一意キー
+    store_slug: str                     # shop_link 中のスラッグ（表示・識別用）
+    store_url: str                      # 確実に開けるURL（取得元PDP）。独立店舗ページは公開GET不可
     shop_name: str = ""
-    follower_count: int = 0
-    total_sold: int = 0                 # 総販売数
-    product_count: int = 0              # 販売中商品数
-    rating: Optional[float] = None      # 店舗評価
-    rating_count: int = 0
-    avatar_url: Optional[str] = None
-    tiktok_username: Optional[str] = None  # 紐づく @アカウント（あれば）
+    follower_count: int = 0             # shop_info.followers_count
+    total_sold: int = 0                 # shop_info.sold_count
+    product_count: int = 0             # shop_info.on_sell_product_count
+    video_count: int = 0               # shop_info.video_count
+    rating: Optional[float] = None      # shop_info.shop_rating
+    rating_count: int = 0              # shop_info.review_count
+    avatar_url: Optional[str] = None    # shop_info.shop_logo.url_list[0]
+    region: Optional[str] = None        # shop_info.region（例: "JP"）
+    description: Optional[str] = None    # shop_info.desc
     is_official: bool = False
-    source_type: Optional[str] = None   # "entry" | "hashtag" | "seed"
-    source_value: Optional[str] = None  # 発見元（entry URL / hashtag 語 / "seed"）
+    source_type: Optional[str] = None   # "pdp" | "store" | "seed"
+    source_value: Optional[str] = None  # 発見元URL（取得元の PDP/店舗URL）
     scraped_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )

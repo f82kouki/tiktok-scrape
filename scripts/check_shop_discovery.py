@@ -1,11 +1,11 @@
-"""Stage 4b: 自動発見の疎通確認
+"""Stage 4b: 自動発見の疎通確認（shop.tiktok.com 経路）
 
-robots 許可パス（shop.tiktok.com/jp + /tag/{カテゴリ}）から /shop/store/... を
-自動収集できるかを確認する薄いスクリプト。発見件数を print するだけ。
+入口 → カテゴリ → 商品(PDP) の順に辿り、robots クリーンなパスから
+PDP URL（＝店舗の入口）を自動収集できるかを確認する。件数を print するだけ。
 
 Usage:
-  uv run python -m scripts.check_shop_discovery          # .env の TIKTOK_SHOP_CATEGORIES を使う
-  uv run python -m scripts.check_shop_discovery 30       # 上限件数を指定
+  uv run python -m scripts.check_shop_discovery          # 既定 上限
+  uv run python -m scripts.check_shop_discovery 40       # PDP 上限を指定
 """
 import asyncio
 import sys
@@ -21,16 +21,20 @@ load_dotenv()
 async def main(max_urls: int) -> int:
     setup_logging(debug=True)
     async with TikTokShopScraper() as s:
-        urls = await s.discover_store_urls(max_urls=max_urls)
+        cats = await s.discover_category_urls(max_categories=6)
+        print(f"\nカテゴリURL: {len(cats)} 件")
+        for u in cats[:10]:
+            print(f"  - {u}")
+        pdps = await s.discover_pdp_urls(max_urls=max_urls, max_categories=6)
 
-    print(f"\n発見した店舗URL: {len(urls)} 件")
-    for u in urls:
+    print(f"\n発見した商品(PDP)URL: {len(pdps)} 件")
+    for u in pdps[:15]:
         print(f"  - {u}")
 
-    if not urls:
-        print("FAIL: 店舗URLが0件（entry/tag の HTML 構造を diagnose_shop で確認、seed 方式へ退避）")
+    if not pdps:
+        print("FAIL: PDP URLが0件（diagnose_shop で構造確認 / seed 方式へ退避）")
         return 1
-    print(f"OK: {len(urls)} 件の店舗URLを許可パスから発見")
+    print(f"OK: {len(pdps)} 件の PDP を発見（各PDPから shop_info→店舗を取得できる）")
     return 0
 
 

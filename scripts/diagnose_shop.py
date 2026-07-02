@@ -19,8 +19,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 from patchright.async_api import async_playwright
 
-from src.shop_parser import extract_store_urls_from_html
-from src.parser import extract_universal_json_from_html, extract_sigi_state_from_html
+from src.shop_parser import (
+    extract_category_urls_from_html,
+    extract_pdp_urls_from_html,
+    extract_modern_router_data,
+    find_shop_info,
+)
 from src.utils import setup_logging
 
 load_dotenv()
@@ -54,8 +58,8 @@ async def main(entry_url: str) -> int:
         except Exception as e:
             print(f"  注意: ナビゲーション中にエラー（無視可）: {e}")
 
-        print("ページロード。手動で カテゴリ→商品→店舗 と遷移し URL パターンを控えてください。")
-        print("DevTools > Network(Fetch/XHR) で 店舗/商品 データを返す API を探してください。")
+        print("ページロード。手動で カテゴリ→商品(PDP)→店舗 と遷移し URL パターンを控えてください。")
+        print("PDP/店舗ページ では __MODERN_ROUTER_DATA__ に shop_info が埋め込まれます。")
 
         # 軽くスクロールして遅延ロード誘発
         for _ in range(3):
@@ -74,18 +78,19 @@ async def main(entry_url: str) -> int:
         html_path.write_text(html, encoding="utf-8")
         print(f"saved HTML:       {html_path}  ({len(html):,} chars)")
 
-        # 埋め込みJSONの有無
-        if extract_universal_json_from_html(html):
-            print("\n__UNIVERSAL_DATA_FOR_REHYDRATION__ : あり")
-        elif extract_sigi_state_from_html(html):
-            print("\nSIGI_STATE : あり（旧形式）")
+        # 埋め込みJSON（shop.tiktok.com は __MODERN_ROUTER_DATA__）の有無
+        router = extract_modern_router_data(html)
+        if router:
+            has_shop = find_shop_info(router) is not None
+            print(f"\n__MODERN_ROUTER_DATA__ : あり（shop_info={'あり' if has_shop else 'なし'}）")
         else:
-            print("\n埋め込みJSON なし → 店舗/商品データは XHR 後読みの可能性（Network を確認）")
+            print("\n__MODERN_ROUTER_DATA__ : なし（入口/カテゴリは持たないことがある）")
 
-        # 店舗リンクが拾えるか
-        store_urls = extract_store_urls_from_html(html, max_urls=30)
-        print(f"\n/shop/store/ リンク: {len(store_urls)} 件")
-        for u in store_urls[:15]:
+        # 発見リンクが拾えるか
+        cats = extract_category_urls_from_html(html, max_urls=30)
+        pdps = extract_pdp_urls_from_html(html, max_urls=30)
+        print(f"\nカテゴリ /jp/c/ リンク: {len(cats)} 件 / 商品 /jp/pdp/ リンク: {len(pdps)} 件")
+        for u in (cats[:8] + pdps[:8]):
             print(f"  - {u}")
 
         loop = asyncio.get_event_loop()
