@@ -1,4 +1,4 @@
-.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr
+.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr shop-dump shop-recon shop-discover shop-run shop-enrich shop-links
 
 # 既定値（呼び出し時に上書き可能）
 HASHTAG ?= コスメ
@@ -72,9 +72,32 @@ diag:  ## ハッシュタグページの診断（HASHTAG で上書き可）
 probe-qr:  ## Phase 0: TikTok QR ログインページ挙動検証
 	uv run python -m scripts.probe_qr
 
+# ---- TikTok Shop 店舗スクレイパー PoC（shop.tiktok.com: 入口→カテゴリ→PDP→shop_info）----
+# robots クリーン（shop.tiktok.com の /jp/c/・/jp/pdp/・/jp/store/ は Disallow なし）。
+SHOP_URL ?= https://shop.tiktok.com/jp/pdp/1731687107318417254
+SHOP_MAX ?= 20
+
+shop-dump:  ## Stage2: PDP/店舗ページ構造ダンプ＆店舗パース確認（SHOP_URL="..." で上書き）
+	uv run python -m scripts.dump_store_page "$(SHOP_URL)"
+
+shop-recon:  ## Stage4a: shop.tiktok.com/jp 手動リコン（DevTools で構造確認）
+	uv run python -m scripts.diagnose_shop
+
+shop-discover:  ## Stage4b: 入口→カテゴリ→PDP の自動発見テスト
+	uv run python -m scripts.check_shop_discovery $(SHOP_MAX)
+
+shop-run:  ## Stage5: 小ロット本ラン（発見PDP→店舗、seller_id重複排除、逐次保存）
+	uv run python -m src.shop_main --max $(SHOP_MAX) --debug
+
+shop-enrich:  ## 連絡先エンリッチ（店名→検索→特商法/会社概要→電話・メール。NAME="店名"で1件試行）
+	uv run python -m scripts.enrich_shops $(if $(NAME),"$(NAME)",)
+
+shop-links:  ## desc からセラー公開URL/SNSを抽出（オフライン・追加取得ゼロ / TEXT="..."で1件試行）
+	uv run python -m scripts.extract_links $(if $(TEXT),"$(TEXT)",)
+
 test:  ## pytest 実行
 	uv run pytest -v
 
 clean:  ## output/ をクリア
-	rm -rf output/*.json output/*.csv
+	rm -rf output/*.json output/*.csv output/*.jsonl
 	@echo "cleaned output/"

@@ -14,3 +14,8 @@ dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.12",
 ]
+
+[tool.pytest.ini_options]
+# リポジトリルートを import パスに入れ、`from src...` を解決可能にする
+# （これが無いと `uv run pytest` が ModuleNotFoundError: No module named 'src' で落ちる）
+pythonpath = ["."]

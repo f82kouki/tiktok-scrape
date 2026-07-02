@@ -19,3 +19,4 @@ output/
 .tiktok_profile/
 .tiktok_qr_probe/
 .tiktok_*/
+.playwright-mcp/
