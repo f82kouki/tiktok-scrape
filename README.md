@@ -1,10 +1,127 @@
 # TikTok Scraper (PoC)
 
-TikTok のハッシュタグから投稿者を発見し、各プロフィールのフォロワー数・bio・SNS リンク等を取得する練習用スクレイパー。
+TikTok を対象にした2つの練習用スクレイパー：
 
-> **Status**: PoC. 学習目的・少量・低頻度の取得用。本番化前に [PRODUCTION_HANDOFF.md](PRODUCTION_HANDOFF.md) を参照。
+1. **🛒 TikTok Shop 店舗抽出** — `shop.tiktok.com` の店舗（seller）情報（店名・フォロワー・販売数・評価等）を横断収集。**本ドキュメントの主対象**。
+2. **👤 TikTok インフルエンサー抽出** — ハッシュタグから投稿者を発見し、各プロフィールのフォロワー数・bio・SNS リンクを取得（最初に作った機能）。
+
+> **Status**: PoC. 学習目的・少量・低頻度の取得用。
+> Shop の詳細は [TIKTOK_SHOP_POC.md](TIKTOK_SHOP_POC.md)（作業ログ）/ [TIKTOK_SHOP_POC_RESULTS.md](TIKTOK_SHOP_POC_RESULTS.md)（できた/できなかった）、インフルエンサーの本番化は [PRODUCTION_HANDOFF.md](PRODUCTION_HANDOFF.md) を参照。
+
+### クイックナビ
+| やりたいこと | コマンド |
+|---|---|
+| 店舗を集める（本命） | `make shop-run SHOP_MAX=20` |
+| 店舗発見の疎通確認 | `make shop-discover` |
+| 1店舗の構造ダンプ | `make shop-dump SHOP_URL="https://shop.tiktok.com/jp/pdp/<id>"` |
+| インフルエンサーを集める | `make step2 HASHTAG=コスメ` |
 
 ---
+
+# 🛒 TikTok Shop 店舗抽出
+
+## 何ができるか
+
+- `shop.tiktok.com/jp`（日本マーケット入口）→ カテゴリ `/jp/c/...` → 商品 `/jp/pdp/...` と辿り、各店舗の情報を取得
+- **店名・フォロワー数・総販売数・商品数・動画数・評価・レビュー数・seller_id・地域・ロゴ・説明**を抽出
+- `seller_id` で重複排除、JSON / CSV / JSONL に逐次保存（途中 Ctrl+C しても安全）
+- **seed 不要・全自動**（入口からカテゴリを自動発見）
+- （補助機能）説明文の公開URL抽出 / 店名→Web検索による連絡先エンリッチ
+
+### 取得できる項目（[`TiktokShop`](src/models.py)）
+
+```json
+{
+  "shop_id": "7494382431354651702",
+  "store_slug": "everyday-muse",
+  "store_url": "https://shop.tiktok.com/jp/pdp/....../1734949803800822838",
+  "shop_name": "Everyday Muse",
+  "follower_count": 458,
+  "total_sold": 7254,
+  "product_count": 395,
+  "video_count": 449,
+  "rating": null,
+  "rating_count": 283,
+  "avatar_url": "https://p16-oec-sg.ibyteimg.com/...",
+  "region": "JP",
+  "description": "Shop Everyday Muse on TikTok Shop! 7.2K+ sold, 400+ followers.  Join the trend!",
+  "is_official": false,
+  "source_type": "pdp",
+  "source_value": "https://shop.tiktok.com/jp/pdp/...",
+  "scraped_at": "2026-07-02T08:10:41.793566+00:00"
+}
+```
+> `rating` は店舗によって `shop_rating` が無く `null` になる（新規/レビュー少）。`store_url` は独立店舗ページが公開GETで開けないため、**確実に開ける取得元PDP URL**を入れている。
+
+## クイックスタート
+
+```bash
+make install                 # 依存と patchright/Chromium（初回のみ）
+make login                   # cookie を ./.tiktok_profile に保存（下記「ログイン要否」参照）
+make shop-run SHOP_MAX=3     # まず小さく：3店舗を取得して動作確認
+make shop-run SHOP_MAX=20    # 問題なければ本番相当
+```
+結果は `output/result_shop.json` / `result_shop.csv` / `shops.jsonl` に出力。
+
+## コマンド一覧（Shop）
+
+| コマンド | 用途 | ネット |
+|---|---|---|
+| `make shop-run SHOP_MAX=20` | 発見→取得→保存（**本命**） | 要 |
+| `make shop-discover` | 入口→カテゴリ→PDP の発見テスト | 要 |
+| `make shop-dump SHOP_URL="..."` | 1商品/店舗ページの構造ダンプ＆パース確認 | 要 |
+| `make shop-recon` | `shop.tiktok.com/jp` の手動リコン（ブラウザ表示） | 要 |
+| `make shop-links [TEXT="..."]` | 説明文からセラー公開URL/SNSを抽出 | 不要（オフライン） |
+| `make shop-enrich [NAME="店名"]` | 店名→Web検索→特商法/会社概要から連絡先 | 要 |
+
+### 上書き可能な変数 / `.env`
+
+```bash
+make shop-run SHOP_MAX=30
+make shop-dump SHOP_URL="https://shop.tiktok.com/jp/pdp/1734949803800822838"
+```
+| 変数（.env） | 意味 |
+|---|---|
+| `TIKTOK_SHOP_ENTRY_URL` | 発見の入口（既定 `https://shop.tiktok.com/jp`） |
+| `TIKTOK_SHOP_CATEGORY_URLS` | 巡回カテゴリを明示指定（カンマ区切り。指定すると入口発見をスキップ） |
+| `TIKTOK_SHOP_SEED_URLS` | 直接投入する PDP / 店舗URL（カンマ区切り） |
+| `TIKTOK_SHOP_MAX` | 取得上限 |
+
+> 特定ジャンルを狙うなら `TIKTOK_SHOP_CATEGORY_URLS` にカテゴリURLを指定（例：コスメ `https://shop.tiktok.com/jp/c/beauty-personal-care/601450`）。無指定だと入口の先頭カテゴリ（アパレル寄り）から発見する。
+
+## 仕組み・判明した重要事実
+
+- **`shop.tiktok.com` は本体 `www.tiktok.com` とは別アプリ**。埋め込みJSONは `__UNIVERSAL_DATA_FOR_REHYDRATION__` ではなく **`__MODERN_ROUTER_DATA__`**。店舗情報はその `...components_map[N].component_data.shop_info` に入る。
+- **商品(PDP)1枚に店舗情報が全部入っている**ので、店舗ページを別途開く必要なし。
+- **独立した店舗ページURLは公開GETで開けない**（`shop.tiktok.com/jp/store/...`＝404、`www.tiktok.com/shop/store/...`＝`/404`へ遷移）。→ `store_url` はPDPを採用。
+- **連絡先（電話/メール）はTikTokに無い**。アプリの「このショップについて」（特商法：商号/電話/住所/代表）は**ネイティブアプリ専用**でweb取得不可。連絡先が要る場合は `shop-enrich`（外部サイトから）で部分的に補完。
+- **login-wall ではないが、cookie 必須級**：cookie無しゲストだと数リクエストで Security Check が発動し取りこぼす（実測 **ゲスト 1/5 vs cookie有り 5/5**）。`make login` の信頼プロファイルを使うこと。
+- **robots**：`shop.tiktok.com` の `/jp/c/`・`/jp/pdp/` は Disallow なし。`www` 側の `/search*`・`/shop/view/product/` は Disallow のため使わない。
+
+## 出力ファイル / 実装
+
+```
+output/
+├── result_shop.json / result_shop.csv / shops.jsonl   # 店舗データ（shop-run）
+├── shop_links.csv / shop_links.jsonl                  # 公開リンク（shop-links）
+├── leads.csv / leads.jsonl                            # 連絡先付きリード（shop-enrich）
+└── store_page.html / store_page.json                  # ダンプ（shop-dump）
+```
+| ファイル | 役割 |
+|---|---|
+| [src/shop_scraper.py](src/shop_scraper.py) | `TikTokShopScraper`（発見→取得→重複排除） |
+| [src/shop_parser.py](src/shop_parser.py) | `__MODERN_ROUTER_DATA__` → `shop_info` → `TiktokShop` |
+| [src/shop_main.py](src/shop_main.py) | `make shop-run` の CLI・逐次保存 |
+| [src/enrich.py](src/enrich.py) | 連絡先エンリッチ（検索→抽出＋店名照合） |
+| `scripts/{dump_store_page,diagnose_shop,check_shop_discovery,enrich_shops,extract_links}.py` | 各診断/補助 |
+
+> **本番統合（Vimmy Tools）**の作戦書：`vimmy-tools/docs/tiktok-shop-scraper-integration-plan.md`（確定コード・fixture・受け入れ基準を同梱）。
+
+---
+
+# 👤 TikTok インフルエンサー抽出
+
+> 以下は最初に作った、ハッシュタグ→プロフィール抽出の機能。
 
 ## 何ができるか
 
@@ -211,27 +328,40 @@ make scale SCALE_HASHTAGS="コスメ メイク スキンケア" SCALE_MAX=100
 ```
 tiktok-scraping/
 ├── src/
-│   ├── main.py        # CLI エントリーポイント
-│   ├── scraper.py     # TikTokScraper (ブラウザ起動、取得、リトライ)
-│   ├── parser.py      # HTML/JSON → TiktokUser の変換 (pure function)
-│   ├── models.py      # TiktokUser dataclass
-│   └── utils.py       # logging, sleep, env
+│   ├── main.py         # 【インフルエンサー】CLI エントリーポイント
+│   ├── scraper.py      # TikTokScraper (ブラウザ起動、取得、リトライ)
+│   ├── parser.py       # HTML/JSON → TiktokUser の変換 (pure function)
+│   ├── shop_main.py    # 【Shop】CLI エントリーポイント（make shop-run）
+│   ├── shop_scraper.py # 【Shop】TikTokShopScraper（発見→取得→重複排除）
+│   ├── shop_parser.py  # 【Shop】__MODERN_ROUTER_DATA__ → shop_info → TiktokShop
+│   ├── enrich.py       # 【Shop】連絡先エンリッチ（検索→抽出＋店名照合）
+│   ├── models.py       # TiktokUser / TiktokShop dataclass
+│   └── utils.py        # logging, sleep, env
 ├── scripts/
-│   ├── login.py            # 手動ログイン用 (patchright 直接利用)
-│   ├── diagnose_hashtag.py # ハッシュタグページの診断
-│   ├── check_browser.py    # ブラウザ疎通テスト
-│   └── check_profile.py    # プロフィール疎通テスト
+│   ├── login.py                # 手動ログイン用 (patchright 直接利用)
+│   ├── diagnose_hashtag.py     # 【インフルエンサー】ハッシュタグ診断
+│   ├── check_browser.py        # ブラウザ疎通テスト
+│   ├── check_profile.py        # プロフィール疎通テスト
+│   ├── dump_store_page.py      # 【Shop】PDP/店舗ページの構造ダンプ
+│   ├── diagnose_shop.py        # 【Shop】入口の手動リコン
+│   ├── check_shop_discovery.py # 【Shop】発見テスト
+│   ├── enrich_shops.py         # 【Shop】連絡先エンリッチ実行
+│   └── extract_links.py        # 【Shop】説明文の公開リンク抽出
 ├── tests/
-│   ├── fixtures/      # サンプル HTML を置く場所
-│   └── test_parser.py # parser の単体テスト
+│   ├── fixtures/           # サンプル HTML を置く場所
+│   ├── test_parser.py      # 【インフルエンサー】parser の単体テスト
+│   ├── test_shop_parser.py # 【Shop】parse_shop / URL抽出 の単体テスト
+│   └── test_enrich.py      # 【Shop】連絡先抽出・照合ゲートの単体テスト
 ├── output/            # 結果出力 (gitignore)
 ├── .tiktok_profile/   # cookie 永続化先 (gitignore)
 ├── .env               # 設定 (gitignore)
 ├── .env.example       # 設定テンプレ
 ├── pyproject.toml
 ├── Makefile
-├── README.md          # このファイル
-└── PRODUCTION_HANDOFF.md  # 本番統合用の詳細作戦書
+├── README.md                        # このファイル
+├── TIKTOK_SHOP_POC.md               # 【Shop】作業ログ（詳細）
+├── TIKTOK_SHOP_POC_RESULTS.md       # 【Shop】できたこと/できなかったこと
+└── PRODUCTION_HANDOFF.md            # 【インフルエンサー】本番統合用の詳細作戦書
 ```
 
 ---
@@ -359,6 +489,9 @@ REQUEST_INTERVAL_MAX=30.0
 - §7 Vimmy Tools 移植プラン (ファイル配置、Dockerfile、Cloud Run 設定)
 - §8 ハマりポイント 8 個 (PoC で踏んだ地雷集)
 - §11 移植時のチェックリスト
+
+**Shop 店舗抽出の本番統合**は、Vimmy Tools リポジトリ内の作戦書
+`vimmy-tools/docs/tiktok-shop-scraper-integration-plan.md`（確定コード・テスト用fixture・各Phaseの受け入れ基準を同梱）を参照。
 
 ---
 
