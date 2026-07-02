@@ -1,4 +1,4 @@
-.PHONY: help install login step0 step1 step2 step3 scale run test clean diag
+.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr
 
 # 既定値（呼び出し時に上書き可能）
 HASHTAG ?= コスメ
@@ -68,6 +68,9 @@ run: step2  ## step2 のエイリアス
 
 diag:  ## ハッシュタグページの診断（HASHTAG で上書き可）
 	uv run python -m scripts.diagnose_hashtag "$(HASHTAG)"
+
+probe-qr:  ## Phase 0: TikTok QR ログインページ挙動検証
+	uv run python -m scripts.probe_qr
 
 test:  ## pytest 実行
 	uv run pytest -v
