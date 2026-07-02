@@ -1,4 +1,4 @@
-.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr shop-dump shop-recon shop-discover shop-run shop-enrich
+.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr shop-dump shop-recon shop-discover shop-run shop-enrich shop-links
 
 # 既定値（呼び出し時に上書き可能）
 HASHTAG ?= コスメ
@@ -91,6 +91,9 @@ shop-run:  ## Stage5: 小ロット本ラン（発見PDP→店舗、seller_id重�
 
 shop-enrich:  ## 連絡先エンリッチ（店名→検索→特商法/会社概要→電話・メール。NAME="店名"で1件試行）
 	uv run python -m scripts.enrich_shops $(if $(NAME),"$(NAME)",)
+
+shop-links:  ## desc からセラー公開URL/SNSを抽出（オフライン・追加取得ゼロ / TEXT="..."で1件試行）
+	uv run python -m scripts.extract_links $(if $(TEXT),"$(TEXT)",)
 
 test:  ## pytest 実行
 	uv run pytest -v

@@ -13,6 +13,7 @@ from src.shop_parser import (
     parse_store_ids,
     extract_category_urls_from_html,
     extract_pdp_urls_from_html,
+    extract_public_links,
 )
 
 
@@ -109,6 +110,26 @@ def test_parse_shop_from_synthetic_router_data():
 
 def test_parse_shop_missing_data_returns_none():
     assert parse_shop("<html>no router data</html>", "https://x/pdp/1") is None
+
+
+def test_extract_public_links_picks_self_published():
+    desc = (
+        "公式サイトはこちら https://only-good.example.jp/ ／ "
+        "Instagram https://instagram.com/onlygood_jp もチェック！"
+    )
+    links = extract_public_links(desc)
+    assert links["website"] == "https://only-good.example.jp/"
+    assert links["instagram"] == "onlygood_jp"
+    assert "https://only-good.example.jp/" in links["all_urls"]
+
+
+def test_extract_public_links_excludes_tiktok_and_handles_empty():
+    # TikTok自身/CDNのURLは自社サイト扱いしない。テンプレ文（URL無し）は全部None
+    links = extract_public_links("Shop on TikTok Shop! https://www.tiktok.com/@x Join the trend!")
+    assert links["website"] is None
+    assert links["all_urls"] == []
+    empty = extract_public_links("")
+    assert empty["website"] is None and empty["instagram"] is None
 
 
 def test_parse_shop_from_fixture():

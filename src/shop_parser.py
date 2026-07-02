@@ -24,8 +24,11 @@ import json
 import logging
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from src.models import TiktokShop
+# プロフィール側で実績のあるSNS抽出をそのまま再利用（bioからIG/YT/Xを拾う発想と同じ）
+from src.parser import _extract_instagram, _extract_youtube, _extract_twitter
 
 logger = logging.getLogger(__name__)
 
@@ -215,3 +218,61 @@ def parse_store_ids(url: str) -> tuple[str, str]:
     """店舗URL .../store/{slug}/{seller_id} から (slug, seller_id) を取り出す"""
     m = _STORE_ID_RE.search(url)
     return (m.group(1), m.group(2)) if m else ("", "")
+
+
+# ---------- セラーが自分で公開したリンクの抽出 ----------
+# 「隠れた連絡先を推定・回収」ではなく「本人が説明欄に公開したリンクを整理」する。
+# プロフィール側 parser.py の bio→IG/YT/X 抽出と同じ発想を店舗の desc に適用する。
+
+_URL_RE = re.compile(r'https?://[^\s<>"\')\]｜|]+')
+# セラー本人サイトとして扱わない（TikTok自身/CDN/画像配信）ドメイン
+_EXCLUDE_HOSTS = (
+    "tiktok.com", "tiktokcdn", "ibyteimg", "ttwstatic", "byteoversea",
+    "tiktokglobalshop", "ibytedtos",
+)
+# 「自社サイト」判定から外すSNS等ドメイン（SNSは別項目で拾う）
+_SNS_HOSTS = (
+    "instagram.com", "youtube.com", "youtu.be", "twitter.com", "x.com",
+    "facebook.com", "line.me", "lin.ee", "t.me", "pinterest.",
+)
+
+
+def _extract_line(text: str) -> Optional[str]:
+    if not text:
+        return None
+    m = re.search(r"(?:line\.me|lin\.ee)/[A-Za-z0-9@%/_.\-~]+", text)
+    return m.group(0) if m else None
+
+
+def extract_public_links(text: str) -> dict:
+    """説明文などから、セラーが自分で公開したURL/SNSを整理して返す。
+
+    返り値:
+      website   : SNS以外の自社サイトURL（先頭1つ）
+      instagram / youtube / twitter / line : 各SNS（parser.py の抽出を再利用）
+      all_urls  : 見つかった外部URL全部（TikTok自身/CDNは除外）
+    """
+    text = text or ""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in _URL_RE.findall(text):
+        u = raw.rstrip(".,)\"'　")
+        host = urlparse(u).netloc.lower()
+        if not host or any(x in host for x in _EXCLUDE_HOSTS):
+            continue
+        if u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    website = next(
+        (u for u in urls if not any(s in urlparse(u).netloc.lower() for s in _SNS_HOSTS)),
+        None,
+    )
+    return {
+        "website": website,
+        "instagram": _extract_instagram(text),
+        "youtube": _extract_youtube(text),
+        "twitter": _extract_twitter(text),
+        "line": _extract_line(text),
+        "all_urls": urls,
+    }
