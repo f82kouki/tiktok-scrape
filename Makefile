@@ -1,4 +1,4 @@
-.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr
+.PHONY: help install login step0 step1 step2 step3 scale run test clean diag probe-qr shop-dump shop-recon shop-discover shop-run
 
 # 既定値（呼び出し時に上書き可能）
 HASHTAG ?= コスメ
@@ -72,9 +72,27 @@ diag:  ## ハッシュタグページの診断（HASHTAG で上書き可）
 probe-qr:  ## Phase 0: TikTok QR ログインページ挙動検証
 	uv run python -m scripts.probe_qr
 
+# ---- TikTok Shop 店舗スクレイパー PoC ----
+# 発見は robots 許可パス（shop.tiktok.com/jp + /tag/）と seed URL のみ。
+# /search 系・/shop/view/product/ は Disallow のため使わない。
+SHOP_URL ?= https://www.tiktok.com/shop/store/goli-nutrition/7495794203056835079
+SHOP_MAX ?= 20
+
+shop-dump:  ## Stage2【最重要】店舗ページ構造ダンプ（SHOP_URL="..." で上書き）
+	uv run python -m scripts.dump_store_page "$(SHOP_URL)"
+
+shop-recon:  ## Stage4a: shop.tiktok.com/jp 手動リコン（DevTools で XHR/URL 確認）
+	uv run python -m scripts.diagnose_shop
+
+shop-discover:  ## Stage4b: 許可パスからの自動発見テスト
+	uv run python -m scripts.check_shop_discovery $(SHOP_MAX)
+
+shop-run:  ## Stage5: 小ロット本ラン（seed+発見→取得、逐次保存 / SHOP_MAX で上書き）
+	uv run python -m src.shop_main --max $(SHOP_MAX) --debug
+
 test:  ## pytest 実行
 	uv run pytest -v
 
 clean:  ## output/ をクリア
-	rm -rf output/*.json output/*.csv
+	rm -rf output/*.json output/*.csv output/*.jsonl
 	@echo "cleaned output/"
